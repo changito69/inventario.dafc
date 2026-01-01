@@ -2,117 +2,85 @@ import streamlit as st
 import pandas as pd
 import os
 
-st.set_page_config(page_title="Inventario Unificado", layout="wide")
+st.set_page_config(page_title="Reporte por Curso", layout="wide")
 
-# --- 1. DICCIONARIO DE PALABRAS CLAVE ---
-MAPEO_INTELIGENTE = {
-    'NOMBRE': ['descripción', 'descripcion', 'descri', 'detalle', 'bien', 'item', 'nombre'],
-    'CANTIDAD': ['cant.', 'cant', 'cantidad', 'stock'],
-    'CODIGO': ['serie', 'código', 'codigo', 's/n'],
-    'MODELO': ['modelo'],
-    'MARCA': ['marca'],
-    'ESTADO': ['estado', 'condición', 'situacion'],
-    'UBICACION': ['ubicación', 'ubicacion', 'lugar', 'curso', 'aula']
-}
+# --- 1. CONFIGURACIÓN ---
+# Palabras clave para detectar dónde empiezan los datos
+CLAVES_CABECERA = ['serie', 'modelo', 'descripción', 'descripcion', 'bien', 'item', 'marca']
 
 def encontrar_fila_cabecera(archivo):
     """
-    Busca la fila que contenga 'SERIE', 'MODELO' o 'DESCRI'.
+    Busca en las primeras 20 filas en qué fila están los títulos.
     """
     try:
-        df_temp = pd.read_excel(archivo, header=None, nrows=15)
+        df_temp = pd.read_excel(archivo, header=None, nrows=20)
         for i, row in df_temp.iterrows():
+            # Convertimos toda la fila a texto para buscar
             fila_texto = [str(celda).lower() for celda in row.tolist()]
-            if any('serie' in x for x in fila_texto) or any('modelo' in x for x in fila_texto) or any('descri' in x for x in fila_texto):
+            
+            # Si encontramos "serie" O "modelo" O "descripción", ahí es.
+            if any(clave in x for x in fila_texto for clave in CLAVES_CABECERA):
                 return i 
     except Exception:
         return 0
     return 0
 
-def procesar_excel(archivo):
-    fila_inicio = encontrar_fila_cabecera(archivo)
-    
-    # Leemos el archivo
-    df = pd.read_excel(archivo, header=fila_inicio)
-    
-    # Limpieza de nombres de columnas
-    df.columns = [str(col).strip().lower() for col in df.columns]
-    columnas_nuevas = {}
-    
-    for col_actual in df.columns:
-        for estandar, variantes in MAPEO_INTELIGENTE.items():
-            if any(v in col_actual for v in variantes):
-                columnas_nuevas[col_actual] = estandar
-                break
-                
-    df = df.rename(columns=columnas_nuevas)
-    cols_finales = [c for c in df.columns if c in MAPEO_INTELIGENTE.keys()]
-    
-    if cols_finales:
-        df_final = df[cols_finales].copy()
-        
-        # Asignar ubicación si no existe
-        if 'UBICACION' not in df_final.columns:
-            nombre_limpio = archivo.replace('.xlsx', '').replace('.xls', '')
-            df_final['UBICACION'] = nombre_limpio
-            
-        return df_final
-    return pd.DataFrame()
+# --- 2. INTERFAZ PRINCIPAL ---
+st.title("📂 Generador de Informes de Inventario")
+st.markdown("Selecciona un archivo (Curso) para ver su reporte detallado.")
 
-# --- INTERFAZ ---
-st.title("🏫 Inventario Digital Centralizado")
-st.markdown("---")
+# Listar archivos
+archivos_disponibles = [f for f in os.listdir('.') if f.endswith('.xlsx') or f.endswith('.xls')]
 
-archivos = [f for f in os.listdir('.') if f.endswith('.xlsx') or f.endswith('.xls')]
-
-if not archivos:
-    st.error("⚠️ No hay archivos Excel en el repositorio.")
+if not archivos_disponibles:
+    st.error("⚠️ No hay archivos Excel cargados en el repositorio.")
 else:
-    df_consolidado = pd.DataFrame()
+    # --- PASO 1: SELECCIONAR CURSO ---
+    st.sidebar.header("Navegación")
     
-    barra = st.progress(0)
-    for i, archivo in enumerate(archivos):
+    # Creamos un selector (Dropdown) con los nombres de los archivos
+    archivo_seleccionado = st.sidebar.selectbox(
+        "📍 Selecciona el Documento/Curso:", 
+        archivos_disponibles
+    )
+
+    # --- PASO 2: PROCESAR SOLO ESE ARCHIVO ---
+    if archivo_seleccionado:
+        st.divider()
+        st.subheader(f"Informe: {archivo_seleccionado.replace('.xlsx', '')}")
+        
         try:
-            df_limpio = procesar_excel(archivo)
-            if not df_limpio.empty:
-                df_consolidado = pd.concat([df_consolidado, df_limpio], ignore_index=True)
-        except Exception as e:
-            # Ignoramos errores silenciosamente para no ensuciar la pantalla
-            pass
-        barra.progress((i + 1) / len(archivos))
-    barra.empty()
-
-    if not df_consolidado.empty:
-        # --- FILTROS ---
-        st.sidebar.header("🔍 Buscador")
-        
-        # Convertimos a texto para ordenar los filtros
-        lugares = sorted(df_consolidado['UBICACION'].astype(str).unique().tolist())
-        filtro_lugar = st.sidebar.selectbox("Filtrar por Archivo/Curso:", ['Todos'] + lugares)
-        
-        busqueda = st.sidebar.text_input("Escribe para buscar (Serie, Bien, Modelo):")
-
-        df_view = df_consolidado.copy()
-        
-        if filtro_lugar != 'Todos':
-            df_view = df_view[df_view['UBICACION'].astype(str) == filtro_lugar]
+            # Detectar fila de inicio
+            fila_inicio = encontrar_fila_cabecera(archivo_seleccionado)
             
-        if busqueda:
-            df_view = df_view[
-                df_view.apply(lambda row: row.astype(str).str.contains(busqueda, case=False).any(), axis=1)
-            ]
+            # Leer datos
+            df = pd.read_excel(archivo_seleccionado, header=fila_inicio)
+            
+            # BLINDAJE ANTI-ERROR (El fix de la pantalla roja)
+            # Convertimos todo a texto para que no falle si hay números mezclados con letras
+            df = df.astype(str)
+            
+            # Reemplazar "nan" (vacíos) por guiones para que se vea limpio
+            df = df.replace('nan', '-')
 
-        # --- RESULTADOS ---
-        col1, col2 = st.columns(2)
-        col1.metric("Activos Encontrados", len(df_view))
-        col2.metric("Archivos Procesados", len(lugares))
-        
-        # --- EL FIX DEFINITIVO ---
-        # Convertimos TODO a texto (String) antes de mostrarlo.
-        # Esto evita el error de PyArrow (flecha roja)
-        df_view = df_view.astype(str)
-        
-        st.dataframe(df_view, use_container_width=True)
-        
-    else:
-        st.warning("⚠️ No se encontraron datos válidos. Verifica que los archivos tengan columnas como 'SERIE', 'MODELO' o 'DESCRIPCIÓN'.")
+            # --- PASO 3: MOSTRAR ESTADÍSTICAS ---
+            total_items = len(df)
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Activos en este Doc", total_items)
+            col2.metric("Fila de Cabecera detectada", f"Fila #{fila_inicio}")
+            
+            # --- PASO 4: BUSCADOR INTERNO ---
+            busqueda = st.text_input(f"🔍 Buscar algo dentro de {archivo_seleccionado}...")
+            
+            df_visible = df.copy()
+            if busqueda:
+                # Filtra si encuentra el texto en CUALQUIER columna
+                df_visible = df_visible[
+                    df_visible.apply(lambda row: row.str.contains(busqueda, case=False).any(), axis=1)
+                ]
+            
+            # Mostrar tabla
+            st.dataframe(df_visible, use_container_width=True)
+            
+        except Exception as e:
+            st.error(f"❌ Error abriendo el archivo: {e}")
