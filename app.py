@@ -2,101 +2,83 @@ import streamlit as st
 import pandas as pd
 import os
 
-st.set_page_config(page_title="Reporte Limpio", layout="wide")
+st.set_page_config(page_title="Inventario Limpio", layout="wide")
 
-# --- 1. DETECTIVE DE CABECERAS ---
-# Buscamos dónde empieza la tabla real
-CLAVES_CABECERA = ['serie', 'modelo', 'descripción', 'descripcion', 'bien', 'item', 'marca', 'cant']
-
-def encontrar_fila_cabecera(archivo):
+def cargar_excel_limpio(archivo):
     try:
-        df_temp = pd.read_excel(archivo, header=None, nrows=20)
-        for i, row in df_temp.iterrows():
-            fila_texto = [str(celda).lower() for celda in row.tolist()]
-            # Si la fila tiene al menos 2 palabras clave (ej: "serie" y "modelo"), es la cabecera
-            coincidencias = sum(1 for clave in CLAVES_CABECERA if any(clave in celda for celda in fila_texto))
-            if coincidencias >= 2:
-                return i
-    except Exception:
-        return 0
-    return 0
+        # 1. ESCANEO: Leemos el archivo "crudo" sin encabezados
+        df_raw = pd.read_excel(archivo, header=None)
+        
+        # 2. BÚSQUEDA DEL PUNTO CERO (Donde empiezan los datos reales)
+        fila_encabezado = -1
+        
+        # Recorremos las primeras 20 filas buscando las palabras sagradas
+        for i, row in df_raw.head(20).iterrows():
+            fila_texto = row.astype(str).str.lower().str.cat(sep=' ')
+            
+            # Condición estricta: Debe tener "serie" Y ("descrip" O "bien")
+            if 'serie' in fila_texto and ('descrip' in fila_texto or 'bien' in fila_texto):
+                fila_encabezado = i
+                break
+        
+        if fila_encabezado == -1:
+            return None, "No se encontró la fila de encabezados (Serie/Descripción)."
 
-# --- 2. LA ASPIRADORA DE DATOS (LIMPIEZA) ---
-def limpiar_dataframe(df):
-    # A. Eliminar columnas que se llamen "Unnamed" (Columnas vacías a la derecha)
-    df = df.loc[:, ~df.columns.str.contains('^Unnamed', case=False)]
-    
-    # B. Convertir todo a texto para evitar errores y facilitar la limpieza
-    df = df.astype(str)
-    
-    # C. Eliminar filas "Administrativas" (Firmas, Títulos, Totales)
-    # Palabras prohibidas en la primera columna válida
-    PALABRAS_BASURA = ['acta', 'entrega', 'recepción', 'conforme', 'rector', 'custodio', 'total', 'firma', 'atentamente', 'unidad educativa', 'nan', 'none']
-    
-    def es_fila_basura(row):
-        # Convertimos toda la fila a un solo texto largo
-        texto_fila = " ".join(row.values).lower()
-        # Si contiene palabras administrativas y NO parece un item (corto), es basura
-        if any(basura in texto_fila for basura in PALABRAS_BASURA):
-            # Excepción: Si dice "Total" pero parece un dato, cuidado. 
-            # Pero para firmas y encabezados, esto funciona bien.
-            return True
-        return False
+        # 3. RECARGA QUIRÚRGICA: Leemos de nuevo, pero empezando EXACTAMENTE en esa fila
+        # Esto elimina automáticamente todo lo que está arriba (Ministerio, Unidad Educativa, etc.)
+        df = pd.read_excel(archivo, header=fila_encabezado)
+        
+        # 4. LIMPIEZA DE COLUMNAS FANTASMA
+        # Borramos cualquier columna que empiece por "Unnamed" (las vacías a la derecha)
+        cols_validas = [c for c in df.columns if not str(c).startswith('Unnamed')]
+        df = df[cols_validas]
+        
+        # 5. LIMPIEZA DE FILAS BASURA (Firmas y pies de página)
+        # Convertimos a texto para buscar palabras de cierre
+        df = df.astype(str)
+        
+        # Filtramos filas que contengan "Recibí conforme", "Rector", etc.
+        palabras_cierre = ['conforme', 'rector', 'custodio', 'atentamente', 'total', 'firma']
+        mask_basura = df.apply(lambda row: any(p in row.astype(str).str.lower().str.cat(sep=' ') for p in palabras_cierre), axis=1)
+        df = df[~mask_basura]
+        
+        # 6. Limpiar celdas vacías que dicen 'nan'
+        df = df.replace('nan', '')
+        
+        return df, None
+        
+    except Exception as e:
+        return None, str(e)
 
-    # Filtramos las filas
-    df = df[~df.apply(es_fila_basura, axis=1)]
-    
-    # D. Eliminar filas donde la descripción sea muy corta o vacía (ej: "-")
-    # Asumimos que la columna 1 o 2 suele ser la descripción
-    if len(df.columns) > 1:
-        col_referencia = df.columns[1] # Tomamos la segunda columna como referencia
-        df = df[df[col_referencia].str.len() > 1] # Si tiene 1 letra o es vacía, adiós
-
-    # E. Reemplazar 'nan' por espacios vacíos visuales
-    df = df.replace('nan', '')
-    
-    return df
-
-# --- 3. INTERFAZ ---
-st.title("📂 Visor de Inventario (Versión Limpia)")
+# --- INTERFAZ ---
+st.title("✨ Visor de Inventario Pulido")
 
 archivos = [f for f in os.listdir('.') if f.endswith('.xlsx') or f.endswith('.xls')]
 
 if not archivos:
-    st.error("⚠️ No hay archivos Excel cargados.")
+    st.error("No hay archivos en el repositorio.")
 else:
     with st.sidebar:
-        st.header("Navegación")
-        seleccion = st.selectbox("Selecciona el Curso:", archivos)
+        st.header("Archivos")
+        seleccion = st.selectbox("Selecciona Curso:", archivos)
 
     if seleccion:
-        try:
-            # 1. Encontrar dónde empieza
-            fila_inicio = encontrar_fila_cabecera(seleccion)
-            
-            # 2. Leer
-            df = pd.read_excel(seleccion, header=fila_inicio)
-            
-            # 3. LIMPIAR (Aquí ocurre la magia)
-            df_limpio = limpiar_dataframe(df)
-            
-            # 4. Mostrar
-            st.divider()
-            st.subheader(f"📋 Reporte: {seleccion.replace('.xlsx', '')}")
-            
-            col1, col2 = st.columns(2)
-            col1.metric("Ítems Válidos", len(df_limpio))
-            col2.caption("Se han eliminado filas de firmas y títulos automáticamente.")
-            
+        st.subheader(f"Archivo: {seleccion.replace('.xlsx', '')}")
+        
+        df_limpio, error = cargar_excel_limpio(seleccion)
+        
+        if error:
+            st.error(f"⚠️ Error: {error}")
+            st.info("Asegúrate que el Excel tenga las columnas 'SERIE' y 'DESCRIPCIÓN' o 'BIEN'.")
+        else:
             # Buscador
-            busqueda = st.text_input("🔍 Buscar:", placeholder="Ej: Silla...")
+            busqueda = st.text_input("🔍 Buscar activo:", placeholder="Escribe serie o nombre...")
+            
             if busqueda:
                 df_limpio = df_limpio[
-                    df_limpio.apply(lambda row: row.str.contains(busqueda, case=False).any(), axis=1)
+                    df_limpio.apply(lambda row: row.astype(str).str.contains(busqueda, case=False).any(), axis=1)
                 ]
 
-            # Tabla sin índice numérico a la izquierda
+            # TABLA LIMPIA (hide_index=True quita los números de la izquierda)
             st.dataframe(df_limpio, use_container_width=True, hide_index=True)
-            
-        except Exception as e:
-            st.error(f"Error: {e}")
+            st.caption(f"Mostrando {len(df_limpio)} ítems válidos.")
