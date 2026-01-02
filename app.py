@@ -51,7 +51,7 @@ def cargar_excel_limpio(archivo):
         return None, str(e)
 
 # --- INTERFAZ ---
-st.title("✨ Visor de Inventario Pulido")
+st.title("✨ Inventario Bloque 2")
 
 archivos = [f for f in os.listdir('.') if f.endswith('.xlsx') or f.endswith('.xls')]
 
